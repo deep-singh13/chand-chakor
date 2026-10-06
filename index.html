@@ -159,6 +159,10 @@
     margin:0;
     color:var(--ink);
   }
+  .ledger-title{display:flex;align-items:center;gap:10px;min-width:0;}
+  .ledger-head:hover button.edit-btn,
+  .ledger-head:focus-within button.edit-btn{opacity:1;}
+  .head-panel{margin:-4px 0 14px;}
   .ledger-meta{text-align:right;font-size:0.82rem;color:var(--muted);line-height:1.4;}
   .ledger-meta .sum{display:block;font-weight:600;color:var(--ink-soft);font-size:0.9rem;}
 
@@ -254,14 +258,17 @@
   .edit-actions .cancel,
   .edit-actions .add-cancel,
   .edit-actions .clear-fields,
-  .edit-actions .delete-item{
+  .edit-actions .delete-item,
+  .edit-actions .delete-cat{
     background:none;border:none;color:var(--muted);text-decoration:underline;padding:0;
   }
   .edit-actions .cancel:hover,
   .edit-actions .add-cancel:hover,
   .edit-actions .clear-fields:hover,
-  .edit-actions .delete-item:hover{color:var(--ink);}
-  .edit-actions .delete-item{margin-left:auto;}
+  .edit-actions .delete-item:hover,
+  .edit-actions .delete-cat:hover{color:var(--ink);}
+  .edit-actions .delete-item,
+  .edit-actions .delete-cat{margin-left:auto;}
 
   /* add item */
   button.add-toggle{
@@ -272,6 +279,11 @@
   }
   button.add-toggle:hover{color:var(--ink);}
   .add-panel{margin-top:10px;}
+  .add-section-wrap{border-top:1px solid var(--line);padding-top:22px;}
+  button.add-section{
+    border-top:none;padding:0;margin:0;
+    font-style:italic;font-weight:500;font-size:1.2rem;
+  }
 
   footer{
     padding:34px 20px 10px;text-align:center;
@@ -338,6 +350,17 @@
 
 <div class="wrap">
   <main id="categories"></main>
+
+  <div class="add-section-wrap">
+    <button type="button" class="add-toggle add-section" id="addSectionToggle">+ Add section</button>
+    <div class="field-panel add-panel" id="addSectionPanel" hidden>
+      <label>Section name<input type="text" id="addSectionName" placeholder="e.g. Music"></label>
+      <div class="edit-actions">
+        <button type="button" class="add-save" id="addSectionSave">Add section</button>
+        <button type="button" class="add-cancel" id="addSectionCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <footer>
     <p>Saved on this device only.</p>
@@ -407,6 +430,19 @@
   var EDIT_PREFIX    = 'chaandChakor:edit:';
   var ADDED_PREFIX   = 'chaandChakor:added:';
   var DELETED_PREFIX = 'chaandChakor:deleted:';
+  var CAT_LABEL_PREFIX = 'chaandChakor:catLabel:';
+  var CUSTOM_CATS_KEY  = 'chaandChakor:customCats';
+  var DELETED_CATS_KEY = 'chaandChakor:deletedCats';
+
+  function readJSON(key, fallback){
+    try{
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    }catch(e){ return fallback; }
+  }
+  function writeJSON(key, val){
+    try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){}
+  }
 
   function getChecked(catId, itemId){
     try{ return localStorage.getItem(CHECK_PREFIX + catId + ':' + itemId) === '1'; }
@@ -456,6 +492,36 @@
     var base = s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-+|-+$)/g,'');
     return (base || 'item') + '-' + Date.now().toString(36).slice(-4);
   }
+  function onEnter(panel, fn){
+    panel.addEventListener('keydown', function(ev){
+      if (ev.key === 'Enter' && ev.target.tagName === 'INPUT'){ ev.preventDefault(); fn(); }
+    });
+  }
+  // two-step confirm for destructive buttons
+  function armButton(button, idleText, armedText, fn){
+    var armedNow = false, timer = null;
+    button.addEventListener('click', function(){
+      if (!armedNow){
+        armedNow = true;
+        button.textContent = armedText;
+        timer = setTimeout(function(){ armedNow = false; button.textContent = idleText; }, 4000);
+        return;
+      }
+      clearTimeout(timer);
+      fn();
+    });
+  }
+
+  // assemble sections: original + custom, minus deleted, with renamed labels applied
+  readJSON(CUSTOM_CATS_KEY, []).forEach(function(c){
+    DATA.push({ id:c.id, label:c.label, custom:true, items:[] });
+  });
+  var deletedCats = readJSON(DELETED_CATS_KEY, []);
+  DATA = DATA.filter(function(cat){ return deletedCats.indexOf(cat.id) === -1; });
+  DATA.forEach(function(cat){
+    var label = readJSON(CAT_LABEL_PREFIX + cat.id, null);
+    if (label) cat.label = label;
+  });
 
   // assemble each category's live item list: original + added, minus deleted, with edits applied
   DATA.forEach(function(cat){
@@ -467,6 +533,7 @@
     cat.items.forEach(function(it){
       var e = getEdit(cat.id, it.id);
       if (e){
+        if (e.name) it.name = e.name;
         it.note = e.note || undefined;
         it.price = (typeof e.price === 'number' && !isNaN(e.price)) ? e.price : undefined;
         it.source = e.source || undefined;
@@ -552,12 +619,13 @@
     editBtn.type = 'button';
     editBtn.className = 'edit-btn';
     editBtn.setAttribute('aria-label', 'Edit ' + it.name);
-    editBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l4 4"/></svg>';
+    editBtn.innerHTML = PENCIL_SVG;
 
     var panel = document.createElement('div');
     panel.className = 'field-panel';
     panel.hidden = true;
     panel.innerHTML =
+      '<label>Name<input type="text" class="f-name" placeholder="Item name"></label>' +
       '<label>Quantity / note<input type="text" class="f-note" placeholder="e.g. × 2"></label>' +
       '<label>Price (₹)<input type="number" class="f-price" min="0" step="1" placeholder="optional"></label>' +
       '<label>Extra note<input type="text" class="f-source" placeholder="e.g. from Office"></label>' +
@@ -584,16 +652,18 @@
       updateStatus();
     });
 
+    var fName = panel.querySelector('.f-name');
     var fNote = panel.querySelector('.f-note');
     var fPrice = panel.querySelector('.f-price');
     var fSource = panel.querySelector('.f-source');
 
     editBtn.addEventListener('click', function(){
+      fName.value = it.name;
       fNote.value = it.note || '';
       fPrice.value = typeof it.price === 'number' ? it.price : '';
       fSource.value = it.source || '';
       panel.hidden = !panel.hidden;
-      if (!panel.hidden) fNote.focus();
+      if (!panel.hidden) fName.focus();
     });
 
     panel.querySelector('.cancel').addEventListener('click', function(){
@@ -604,17 +674,23 @@
       fNote.value = ''; fPrice.value = ''; fSource.value = '';
     });
 
-    panel.querySelector('.save').addEventListener('click', function(){
+    function saveItem(){
+      var nameVal = fName.value.trim();
+      if (!nameVal){ fName.focus(); return; }
       var noteVal = fNote.value.trim();
       var priceVal = fPrice.value.trim();
       var sourceVal = fSource.value.trim();
 
+      it.name = nameVal;
       it.note = noteVal || undefined;
       it.price = priceVal !== '' && !isNaN(parseFloat(priceVal)) ? parseFloat(priceVal) : undefined;
       it.source = sourceVal || undefined;
 
-      setEdit(cat.id, it.id, { note: it.note, price: it.price, source: it.source });
+      setEdit(cat.id, it.id, { name: it.name, note: it.note, price: it.price, source: it.source });
 
+      nameEl.textContent = it.name;
+      btn.setAttribute('aria-label', 'Mark ' + it.name + ' ready');
+      editBtn.setAttribute('aria-label', 'Edit ' + it.name);
       noteEl.textContent = it.note || '';
       noteEl.style.display = it.note ? '' : 'none';
       srcEl.textContent = it.source ? ('from ' + it.source) : '';
@@ -624,7 +700,9 @@
       refreshCategoryMeta(cat);
       refreshSpend();
       panel.hidden = true;
-    });
+    }
+    panel.querySelector('.save').addEventListener('click', saveItem);
+    onEnter(panel, saveItem);
 
     var delBtn = panel.querySelector('.delete-item');
     var delArmed = false, delTimer = null;
@@ -656,21 +734,97 @@
     });
   }
 
-  DATA.forEach(function(cat){
+  var PENCIL_SVG = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l4 4"/></svg>';
+
+  function renderCategory(cat){
     var section = document.createElement('section');
     section.className = 'category';
 
     var head = document.createElement('div');
     head.className = 'ledger-head';
+    var titleWrap = document.createElement('div');
+    titleWrap.className = 'ledger-title';
     var h2 = document.createElement('h2');
     h2.textContent = cat.label;
+    var headEditBtn = document.createElement('button');
+    headEditBtn.type = 'button';
+    headEditBtn.className = 'edit-btn';
+    headEditBtn.setAttribute('aria-label', 'Edit section ' + cat.label);
+    headEditBtn.innerHTML = PENCIL_SVG;
+    titleWrap.appendChild(h2);
+    titleWrap.appendChild(headEditBtn);
     var meta = document.createElement('div');
     meta.className = 'ledger-meta';
-    head.appendChild(h2);
+    head.appendChild(titleWrap);
     head.appendChild(meta);
     section.appendChild(head);
     catSumEls[cat.id] = meta;
     refreshCategoryMeta(cat);
+
+    var headPanel = document.createElement('div');
+    headPanel.className = 'field-panel head-panel';
+    headPanel.hidden = true;
+    headPanel.innerHTML =
+      '<label>Section name<input type="text" class="h-label" placeholder="Section name"></label>' +
+      '<div class="edit-actions">' +
+        '<button type="button" class="save">Save</button>' +
+        '<button type="button" class="cancel">Cancel</button>' +
+        '<button type="button" class="delete-cat">Delete section</button>' +
+      '</div>';
+    section.appendChild(headPanel);
+
+    var hLabel = headPanel.querySelector('.h-label');
+    headEditBtn.addEventListener('click', function(){
+      hLabel.value = cat.label;
+      headPanel.hidden = !headPanel.hidden;
+      if (!headPanel.hidden) hLabel.focus();
+    });
+    headPanel.querySelector('.cancel').addEventListener('click', function(){
+      headPanel.hidden = true;
+    });
+    function saveHeading(){
+      var val = hLabel.value.trim();
+      if (!val){ hLabel.focus(); return; }
+      cat.label = val;
+      if (cat.custom){
+        writeJSON(CUSTOM_CATS_KEY, readJSON(CUSTOM_CATS_KEY, []).map(function(c){
+          return c.id === cat.id ? { id:c.id, label:val } : c;
+        }));
+      } else {
+        writeJSON(CAT_LABEL_PREFIX + cat.id, val);
+      }
+      h2.textContent = val;
+      headEditBtn.setAttribute('aria-label', 'Edit section ' + val);
+      headPanel.hidden = true;
+    }
+    headPanel.querySelector('.save').addEventListener('click', saveHeading);
+    onEnter(headPanel, saveHeading);
+
+    armButton(headPanel.querySelector('.delete-cat'), 'Delete section', 'Click again to delete section', function(){
+      try{
+        cat.items.forEach(function(it){
+          if (getChecked(cat.id, it.id)) totalChecked--;
+          localStorage.removeItem(CHECK_PREFIX + cat.id + ':' + it.id);
+          localStorage.removeItem(EDIT_PREFIX + cat.id + ':' + it.id);
+        });
+        localStorage.removeItem(ADDED_PREFIX + cat.id);
+        localStorage.removeItem(DELETED_PREFIX + cat.id);
+        localStorage.removeItem(CAT_LABEL_PREFIX + cat.id);
+      }catch(e){}
+      if (cat.custom){
+        writeJSON(CUSTOM_CATS_KEY, readJSON(CUSTOM_CATS_KEY, []).filter(function(c){ return c.id !== cat.id; }));
+      } else {
+        var dc = readJSON(DELETED_CATS_KEY, []);
+        if (dc.indexOf(cat.id) === -1) dc.push(cat.id);
+        writeJSON(DELETED_CATS_KEY, dc);
+      }
+      totalItems -= cat.items.length;
+      DATA.splice(DATA.indexOf(cat), 1);
+      delete catSumEls[cat.id];
+      section.remove();
+      refreshSpend();
+      updateStatus();
+    });
 
     var ul = document.createElement('ul');
     ul.className = 'items';
@@ -718,7 +872,7 @@
       addPanel.hidden = true;
     });
 
-    addPanel.querySelector('.add-save').addEventListener('click', function(){
+    function addItem(){
       var nameVal = aName.value.trim();
       if (!nameVal){ aName.focus(); return; }
       var noteVal = aNote.value.trim();
@@ -744,8 +898,41 @@
 
       resetAddPanel();
       addPanel.hidden = true;
-    });
+    }
+    addPanel.querySelector('.add-save').addEventListener('click', addItem);
+    onEnter(addPanel, addItem);
+
+    return { openAddPanel: function(){ addPanel.hidden = false; aName.focus(); } };
+  }
+
+  DATA.forEach(renderCategory);
+
+  // add section
+  var addSectionToggle = document.getElementById('addSectionToggle');
+  var addSectionPanel = document.getElementById('addSectionPanel');
+  var addSectionName = document.getElementById('addSectionName');
+  addSectionToggle.addEventListener('click', function(){
+    addSectionPanel.hidden = !addSectionPanel.hidden;
+    if (!addSectionPanel.hidden) addSectionName.focus();
   });
+  document.getElementById('addSectionCancel').addEventListener('click', function(){
+    addSectionName.value = '';
+    addSectionPanel.hidden = true;
+  });
+  function addSection(){
+    var label = addSectionName.value.trim();
+    if (!label){ addSectionName.focus(); return; }
+    var cat = { id: slugify(label), label: label, custom: true, items: [] };
+    var customs = readJSON(CUSTOM_CATS_KEY, []);
+    customs.push({ id: cat.id, label: cat.label });
+    writeJSON(CUSTOM_CATS_KEY, customs);
+    DATA.push(cat);
+    addSectionName.value = '';
+    addSectionPanel.hidden = true;
+    renderCategory(cat).openAddPanel();
+  }
+  document.getElementById('addSectionSave').addEventListener('click', addSection);
+  onEnter(addSectionPanel, addSection);
 
   refreshSpend();
 
@@ -755,27 +942,14 @@
   updateStatus();
 
   var resetBtn = document.getElementById('resetBtn');
-  var armed = false, armTimer = null;
-  resetBtn.addEventListener('click', function(){
-    if (!armed){
-      armed = true;
-      resetBtn.textContent = 'Tap again to clear everything';
-      armTimer = setTimeout(function(){
-        armed = false;
-        resetBtn.textContent = 'Reset checklist';
-      }, 4000);
-      return;
-    }
-    clearTimeout(armTimer);
+  armButton(resetBtn, 'Reset checklist', 'Tap again to clear everything', function(){
     try{
-      DATA.forEach(function(cat){
-        cat.items.forEach(function(it){
-          localStorage.removeItem(CHECK_PREFIX + cat.id + ':' + it.id);
-          localStorage.removeItem(EDIT_PREFIX + cat.id + ':' + it.id);
-        });
-        localStorage.removeItem(ADDED_PREFIX + cat.id);
-        localStorage.removeItem(DELETED_PREFIX + cat.id);
-      });
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++){
+        var k = localStorage.key(i);
+        if (k && k.indexOf('chaandChakor:') === 0) keys.push(k);
+      }
+      keys.forEach(function(k){ localStorage.removeItem(k); });
     }catch(e){}
     location.reload();
   });
